@@ -511,6 +511,37 @@ def count_tokens(text: str) -> int:
 
 
 # ============================================================
+# Context Monitoring
+# ============================================================
+
+
+def get_max_context_length() -> int:
+    """
+    Safely try to determine the maximum context length of the loaded model.
+    Checks user config first, then inspects model config attributes.
+    """
+    if config.MAX_CONTEXT_LENGTH is not None:
+        return config.MAX_CONTEXT_LENGTH
+
+    if model is None:
+        return 8192  # Safe default if model not loaded
+
+    # Try common MLX model config attributes
+    try:
+        # Some MLX models store config in 'config', others in 'text_model.config'
+        m_config = model.config if hasattr(model, "config") else getattr(model, "text_model", model).config
+
+        # Check standard attributes that represent context length
+        for attr in ["max_position_embeddings", "sliding_window", "n_positions", "max_seq_len"]:
+            if hasattr(m_config, attr) and getattr(m_config, attr) is not None:
+                return int(getattr(m_config, attr))
+    except Exception:
+        pass
+
+    return 8192  # Fallback if we absolutely cannot find it
+
+
+# ============================================================
 # API Route Handlers
 # ============================================================
 
@@ -525,6 +556,11 @@ async def create_message(request: MessagesRequest):
         prompt = format_messages_for_model(request.messages, request.system, request.tools)
 
         input_tokens = count_tokens(prompt)
+        max_context = get_max_context_length()
+        remaining = max_context - input_tokens
+
+        # Log to server console
+        print(f"[{request.model}] Context used: {input_tokens} / {max_context} tokens. Remaining: {remaining}")
 
         # Check if thinking is enabled in the request
         thinking_enabled = (
