@@ -520,8 +520,8 @@ def get_max_context_length() -> int:
     Safely try to determine the maximum context length of the loaded model.
     Checks user config first, then inspects model config attributes.
     """
-    if config.MAX_CONTEXT_LENGTH is not None:
-        return config.MAX_CONTEXT_LENGTH
+    if config.DEFAULT_MAX_TOKENS is not None:
+        return config.DEFAULT_MAX_TOKENS
 
     if model is None:
         return 8192  # Safe default if model not loaded

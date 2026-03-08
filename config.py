@@ -35,11 +35,5 @@ class Config:
     # Logging
     VERBOSE: bool = os.getenv("VERBOSE", "false").lower() == "true"
 
-    # Context settings
-    MAX_CONTEXT_LENGTH: Optional[int] = (
-        int(os.getenv("MAX_CONTEXT_LENGTH")) if os.getenv("MAX_CONTEXT_LENGTH") else None
-    )
-
-
 config = Config()
 
