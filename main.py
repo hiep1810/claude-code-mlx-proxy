@@ -58,7 +58,7 @@ class SystemContent(BaseModel):
 
 
 class ThinkingConfig(BaseModel):
-    type: Literal["enabled", "disabled"]
+    type: Literal["enabled", "disabled", "adaptive"]
     budget_tokens: Optional[int] = None
 
 
@@ -528,7 +528,7 @@ async def create_message(request: MessagesRequest):
 
         # Check if thinking is enabled in the request
         thinking_enabled = (
-            request.thinking is not None and request.thinking.type == "enabled"
+            request.thinking is not None and request.thinking.type in ("enabled", "adaptive")
         )
 
         if request.stream:
