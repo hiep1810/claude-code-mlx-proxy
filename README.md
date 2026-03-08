@@ -1,12 +1,13 @@
 # Local MLX Backend for Claude Code
 
-This project provides a local server that acts as a backend for the **Claude Code** command line coding assistant. It allows you to use open-source models running on your local machine via Apple's MLX framework. Instead of sending your code to Anthropic's servers, you can use powerful models like Llama 3, GLM-4.5-Air, DeepSeek, and more, all running on your Apple Silicon Mac.
+This project provides a local server that acts as a backend for the **Claude Code** command line coding assistant. It allows you to use open-source models running on your local machine via Apple's MLX framework. Instead of sending your code to Anthropic's servers, you can use powerful models like **Qwen 3.5**, Llama 3, GLM-4.5-Air, DeepSeek, and more, all running on your Apple Silicon Mac.
 
-This server implements the Claude Messages API format that Claude Code communicates with, redirecting all requests to a local model of your choice.
+This server implements the Claude Messages API format that Claude Code communicates with, redirecting all requests to a local model of your choice. It features a built-in **tool-calling adapter** specifically designed to translate Claude's complex JSON tool-calling protocol into Qwen 3.5's XML-based format, making Qwen fully compatible with Claude Code's agentic workflows.
 
 ## Why Use a Local Backend with Claude Code?
 
 - **Total Privacy**: Your code, prompts, and conversations never leave your local machine.
+- **Agentic Open-Source**: Run models that natively support tool calling and reasoning, such as Qwen 3.5.
 - **Use Any Model**: Experiment with thousands of open-source models from the [MLX Community on Hugging Face](https://huggingface.co/mlx-community).
 - **Work Offline**: Get code completions and chat with your local model without an internet connection.
 - **No API Keys or Costs**: Run powerful models without needing to manage API keys or pay for usage.
@@ -169,13 +170,14 @@ All server settings are managed through the `.env` file.
 | --------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `HOST`                | `0.0.0.0`                                     | The host address for the server.                                                                        |
 | `PORT`                | `8888`                                        | The port for the server.                                                                                |
-| `MODEL_NAME`          | `mlx-community/GLM-4.5-Air-3bit`              | The MLX model to load from Hugging Face. Find more at the [MLX Community](https://huggingface.co/mlx-community). |
+| `MODEL_NAME`          | `mlx-community/Qwen3.5-4B-MLX-4bit`           | The MLX model to load from Hugging Face. Find more at the [MLX Community](https://huggingface.co/mlx-community). |
 | `API_MODEL_NAME`      | `claude-4-sonnet-20250514`                    | The model name that the API will report. Set this to a known Claude model to ensure client compatibility. |
 | `TRUST_REMOTE_CODE`   | `false`                                       | Set to `true` if the model tokenizer requires trusting remote code.                                     |
 | `EOS_TOKEN`           | `None`                                        | The End-of-Sequence token, required for some models like Qwen.               |
 | `DEFAULT_MAX_TOKENS`  | `4096`                                        | The default maximum number of tokens to generate in a response.                                         |
-| `DEFAULT_TEMPERATURE` | `1.0`                                         | The default temperature for generation (creativity).                                                    |
-| `DEFAULT_TOP_P`       | `1.0`                                         | The default top-p for generation.                                                                       |
+| `DEFAULT_TEMPERATURE` | `0.7`                                         | The default temperature for generation (creativity). Qwen typically prefers 0.7 - 0.9.                  |
+| `DEFAULT_TOP_P`       | `0.9`                                         | The default top-p for generation.                                                                       |
+| `REPETITION_PENALTY`  | `None`                                        | Applies a penalty to generation to prevent text loops. **Recommended (`1.1`) for Qwen 3.5.**            |
 | `VERBOSE`             | `false`                                       | Set to `true` to enable verbose logging from the MLX generate function.                                 |
 
 ## License
