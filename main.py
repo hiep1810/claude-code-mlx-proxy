@@ -610,15 +610,21 @@ async def create_message(request: Request):
     input_tokens = await asyncio.to_thread(count_tokens, prompt)
     
     # Pre-fill logic: evaluate the prompt in the background once before starting stream_generate
-    # This warms up the KV cache.
+    # This warms up the KV cache safely in chunks to avoid Metal malloc limits.
     def prefill():
         if kv_cache is None:
             return
             
         with mlx_lock:
             tokens = mx.array(tokenizer.encode(prompt))
-            # Process prompt in one go (or chunks) to build cache
-            model(tokens[None], kv_cache)
+            chunk_size = 512 # Safe chunk size to stay under 8GB Metal buffer limits
+            
+            for i in range(0, tokens.shape[0], chunk_size):
+                chunk = tokens[i : i + chunk_size]
+                # Forward pass for the chunk
+                model(chunk[None], kv_cache)
+                # Force Metal to finalize calculations and free intermediate graphs
+                mx.eval([c.state for c in kv_cache])
             # The cache is now mutated and ready for the first token generation
 
     await asyncio.to_thread(prefill)
