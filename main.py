@@ -1,6 +1,8 @@
 import json
 import re
 import uuid
+import asyncio
+import threading
 from typing import List, Dict, Any, Optional, Union, Literal
 from contextlib import asynccontextmanager
 
@@ -555,7 +557,7 @@ async def create_message(request: MessagesRequest):
         # Format messages using the model's chat template
         prompt = format_messages_for_model(request.messages, request.system, request.tools)
 
-        input_tokens = count_tokens(prompt)
+        input_tokens = await asyncio.to_thread(count_tokens, prompt)
         max_context = get_max_context_length()
         remaining = max_context - input_tokens
 
@@ -586,7 +588,7 @@ async def count_tokens_endpoint(request: TokenCountRequest):
 
     try:
         prompt = format_messages_for_model(request.messages, request.system, request.tools)
-        token_count = count_tokens(prompt)
+        token_count = await asyncio.to_thread(count_tokens, prompt)
         return {"input_tokens": token_count}
 
     except Exception as e:
@@ -614,7 +616,8 @@ async def generate_response(
     if config.REPETITION_PENALTY is not None:
         gen_kwargs["repetition_penalty"] = config.REPETITION_PENALTY
 
-    response_text = generate(
+    response_text = await asyncio.to_thread(
+        generate,
         model,
         tokenizer,
         prompt=prompt,
@@ -624,7 +627,7 @@ async def generate_response(
     # Process the raw output: extract thinking + tool calls
     content_blocks, stop_reason = process_model_response(response_text, thinking_enabled)
 
-    output_tokens = count_tokens(response_text)
+    output_tokens = await asyncio.to_thread(count_tokens, response_text)
 
     response = MessageResponse(
         id="msg_" + str(abs(hash(prompt)))[:8],
@@ -652,14 +655,44 @@ async def stream_generate_response(
 
     How it works:
     1. Send message_start event
-    2. Stream tokens as content_block_delta events
-    3. After streaming completes, process full text for tool calls / thinking
-    4. If tool calls found, send additional tool_use content blocks
-    5. Send message_delta with final stop_reason and usage
-    6. Send message_stop
+    2. Start a background thread to generate tokens (Producer)
+    3. Read tokens from a queue in the main thread (Consumer)
+    4. Send content_block_delta events as tokens arrive
+    5. After streaming completes, process full text for tool calls / thinking
+    6. If tool calls found, send additional tool_use content blocks
+    7. Send message_delta with final stop_reason and usage
+    8. Send message_stop
+
+    Why threads: mlx_lm.stream_generate is blocking and CPU-heavy.
+    Running it in a thread keeps the FastAPI event loop responsive.
     """
     response_id = "msg_" + str(abs(hash(prompt)))[:8]
     full_text = ""
+
+    # Build generation kwargs
+    gen_kwargs = {
+        "max_tokens": request.max_tokens,
+    }
+    if config.REPETITION_PENALTY is not None:
+        gen_kwargs["repetition_penalty"] = config.REPETITION_PENALTY
+
+    # Producer-Consumer queue setup
+    queue = asyncio.Queue()
+    loop = asyncio.get_running_loop()
+
+    def producer():
+        try:
+            for response in stream_generate(
+                model, tokenizer, prompt=prompt, **gen_kwargs
+            ):
+                asyncio.run_coroutine_threadsafe(queue.put(response), loop)
+            # Poison pill
+            asyncio.run_coroutine_threadsafe(queue.put(None), loop)
+        except Exception as e:
+            asyncio.run_coroutine_threadsafe(queue.put(e), loop)
+
+    # Start the generator thread
+    threading.Thread(target=producer, daemon=True).start()
 
     # --- message_start ---
     message_start = {
@@ -685,19 +718,14 @@ async def stream_generate_response(
     }
     yield f"event: content_block_start\ndata: {json.dumps(content_start)}\n\n"
 
-    # --- Stream tokens ---
-    gen_kwargs = {
-        "max_tokens": request.max_tokens,
-    }
-    if config.REPETITION_PENALTY is not None:
-        gen_kwargs["repetition_penalty"] = config.REPETITION_PENALTY
+    # --- Stream tokens from the queue ---
+    while True:
+        response = await queue.get()
+        if response is None:
+            break
+        if isinstance(response, Exception):
+            raise response
 
-    for response in stream_generate(
-        model,
-        tokenizer,
-        prompt=prompt,
-        **gen_kwargs,
-    ):
         full_text += response.text
 
         content_delta = {
@@ -749,7 +777,7 @@ async def stream_generate_response(
     # --- Determine stop reason ---
     stop_reason = "tool_use" if tool_calls else "end_turn"
 
-    output_tokens = count_tokens(full_text)
+    output_tokens = await asyncio.to_thread(count_tokens, full_text)
 
     # --- message_delta with final usage ---
     message_delta = {
