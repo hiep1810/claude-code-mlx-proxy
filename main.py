@@ -567,20 +567,24 @@ async def create_message(request: Request):
     # Queue to send text chunks to the cache builder worker
     chunk_queue = queue.Queue()
     # KV cache state
-    from mlx_lm.models.base import KVCache
-    
-    # Safely determine the number of layers from the loaded model
-    if hasattr(model, "layers"):
-        num_layers = len(model.layers)
-    elif hasattr(model, "model") and hasattr(model.model, "layers"):
-        num_layers = len(model.model.layers)
-    elif hasattr(model, "text_model") and hasattr(model.text_model, "layers"):
-        num_layers = len(model.text_model.layers)
-    else:
-        print("Warning: Could not dynamically determine num_layers. Defaulting to 32.")
-        num_layers = 32
-        
-    kv_cache = [KVCache() for _ in range(num_layers)]
+    kv_cache = None
+    try:
+        from mlx_lm.models.cache import make_prompt_cache
+        kv_cache = make_prompt_cache(model)
+    except ImportError:
+        # Fallback for older versions or different MLX architectures
+        try:
+            from mlx_lm.models.base import KVCache
+            if hasattr(model, "layers"):
+                num_layers = len(model.layers)
+            elif hasattr(model, "model") and hasattr(model.model, "layers"):
+                num_layers = len(model.model.layers)
+            else:
+                num_layers = 32
+            kv_cache = [KVCache() for _ in range(num_layers)]
+        except ImportError:
+            print("Warning: Could not initialize MLX KV Cache. Pre-filling disabled.")
+            kv_cache = None
     
     # We collect the full data to maintain compatibility with existing formatting logic
     # but the pre-filling happens in parallel.
@@ -608,6 +612,9 @@ async def create_message(request: Request):
     # Pre-fill logic: evaluate the prompt in the background once before starting stream_generate
     # This warms up the KV cache.
     def prefill():
+        if kv_cache is None:
+            return
+            
         with mlx_lock:
             tokens = mx.array(tokenizer.encode(prompt))
             # Process prompt in one go (or chunks) to build cache
@@ -616,7 +623,10 @@ async def create_message(request: Request):
 
     await asyncio.to_thread(prefill)
     
-    print(f"[{typed_req.model}] Pre-filling complete ({input_tokens} tokens). Starting generation.")
+    if kv_cache is not None:
+        print(f"[{typed_req.model}] Pre-filling complete ({input_tokens} tokens). Starting generation.")
+    else:
+        print(f"[{typed_req.model}] Starting generation (standard mode).")
 
     thinking_enabled = (
         typed_req.thinking is not None and typed_req.thinking.type in ("enabled", "adaptive")
