@@ -13,14 +13,12 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from mlx_lm import load, generate, stream_generate
-from mlx_lm.utils import load_config
 import mlx.core as mx
 from config import config
 
 # Global variables for model and tokenizer
 model = None
 tokenizer = None
-model_config = None
 mlx_lock = threading.Lock()  # Prevents concurrent GPU access (Metal crashes)
 
 
@@ -149,7 +147,7 @@ class MessageStreamResponse(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global model, tokenizer, model_config
+    global model, tokenizer
     print(f"Loading MLX model: {config.MODEL_NAME}")
 
     tokenizer_config = {}
@@ -159,7 +157,6 @@ async def lifespan(app: FastAPI):
         tokenizer_config["eos_token"] = config.EOS_TOKEN
 
     model, tokenizer = load(config.MODEL_NAME, tokenizer_config=tokenizer_config)
-    model_config = load_config(config.MODEL_NAME)
     print("Model loaded successfully!")
     yield
     print("Shutting down...")
@@ -571,7 +568,18 @@ async def create_message(request: Request):
     chunk_queue = queue.Queue()
     # KV cache state
     from mlx_lm.models.base import KVCache
-    num_layers = getattr(model_config, "num_hidden_layers", 32)
+    
+    # Safely determine the number of layers from the loaded model
+    if hasattr(model, "layers"):
+        num_layers = len(model.layers)
+    elif hasattr(model, "model") and hasattr(model.model, "layers"):
+        num_layers = len(model.model.layers)
+    elif hasattr(model, "text_model") and hasattr(model.text_model, "layers"):
+        num_layers = len(model.text_model.layers)
+    else:
+        print("Warning: Could not dynamically determine num_layers. Defaulting to 32.")
+        num_layers = 32
+        
     kv_cache = [KVCache() for _ in range(num_layers)]
     
     # We collect the full data to maintain compatibility with existing formatting logic
