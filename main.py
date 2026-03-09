@@ -634,11 +634,11 @@ async def create_message(request: Request):
 
     if typed_req.stream:
         return StreamingResponse(
-            stream_generate_response(typed_req, prompt, input_tokens, thinking_enabled, existing_cache=kv_cache),
+            stream_generate_response(typed_req, prompt, input_tokens, thinking_enabled, prompt_cache=kv_cache),
             media_type="text/event-stream",
         )
     else:
-        return await generate_response(typed_req, prompt, input_tokens, thinking_enabled, existing_cache=kv_cache)
+        return await generate_response(typed_req, prompt, input_tokens, thinking_enabled, prompt_cache=kv_cache)
 
 
 @app.post("/v1/messages/count_tokens")
@@ -665,7 +665,7 @@ async def generate_response(
     prompt: str,
     input_tokens: int,
     thinking_enabled: bool,
-    existing_cache: Optional[List[Any]] = None,
+    prompt_cache: Optional[List[Any]] = None,
 ):
     """Generate non-streaming response with optional pre-filled cache support."""
     # Build generation kwargs
@@ -690,7 +690,7 @@ async def generate_response(
                 model,
                 tokenizer,
                 prompt=prompt,
-                **{**gen_kwargs, "existing_cache": existing_cache} if existing_cache else gen_kwargs,
+                **{**gen_kwargs, "prompt_cache": prompt_cache} if prompt_cache else gen_kwargs,
             )
 
     response_text = await asyncio.to_thread(thread_generate)
@@ -721,7 +721,7 @@ async def stream_generate_response(
     prompt: str,
     input_tokens: int,
     thinking_enabled: bool,
-    existing_cache: Optional[List[Any]] = None,
+    prompt_cache: Optional[List[Any]] = None,
 ):
     """Generate streaming response with optional pre-filled cache support."""
     response_id = "msg_" + str(abs(hash(prompt)))[:8]
@@ -743,7 +743,7 @@ async def stream_generate_response(
             with mlx_lock:
                 for response in stream_generate(
                     model, tokenizer, prompt=prompt, 
-                    **{**gen_kwargs, "existing_cache": existing_cache} if existing_cache else gen_kwargs
+                    **{**gen_kwargs, "prompt_cache": prompt_cache} if prompt_cache else gen_kwargs
                 ):
                     asyncio.run_coroutine_threadsafe(queue.put(response), loop)
             # Poison pill
