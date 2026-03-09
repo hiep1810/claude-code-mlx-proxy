@@ -16,6 +16,7 @@ from config import config
 # Global variables for model and tokenizer
 model = None
 tokenizer = None
+mlx_lock = threading.Lock()  # Prevents concurrent GPU access (Metal crashes)
 
 
 # ============================================================
@@ -480,29 +481,31 @@ def count_tokens(text: str) -> int:
     """Count tokens in text using the loaded tokenizer."""
     try:
         if isinstance(text, str) and text.strip():
-            # Try the tokenizer's __call__ method first
-            try:
-                result = tokenizer(text, return_tensors=False, add_special_tokens=False)
-                if isinstance(result, dict) and "input_ids" in result:
-                    return len(result["input_ids"])
-                elif hasattr(result, "__len__"):
-                    return len(result)
-            except (AttributeError, TypeError, ValueError):
-                pass
+            # Synchronize access to the tokenizer/GPU
+            with mlx_lock:
+                # Try the tokenizer's __call__ method first
+                try:
+                    result = tokenizer(text, return_tensors=False, add_special_tokens=False)
+                    if isinstance(result, dict) and "input_ids" in result:
+                        return len(result["input_ids"])
+                    elif hasattr(result, "__len__"):
+                        return len(result)
+                except (AttributeError, TypeError, ValueError):
+                    pass
 
-            # Try direct encode
-            try:
-                encoded = tokenizer.encode(text)
-                return len(encoded) if hasattr(encoded, "__len__") else len(list(encoded))
-            except (AttributeError, TypeError, ValueError):
-                pass
+                # Try direct encode
+                try:
+                    encoded = tokenizer.encode(text)
+                    return len(encoded) if hasattr(encoded, "__len__") else len(list(encoded))
+                except (AttributeError, TypeError, ValueError):
+                    pass
 
-            # Try with explicit string conversion
-            try:
-                tokens = tokenizer.encode(str(text), add_special_tokens=False)
-                return len(tokens)
-            except (AttributeError, TypeError, ValueError):
-                pass
+                # Try with explicit string conversion
+                try:
+                    tokens = tokenizer.encode(str(text), add_special_tokens=False)
+                    return len(tokens)
+                except (AttributeError, TypeError, ValueError):
+                    pass
 
         # Fallback: character-based estimation (~4 chars per token)
         return max(1, len(str(text)) // 4)
@@ -616,13 +619,16 @@ async def generate_response(
     if config.REPETITION_PENALTY is not None:
         gen_kwargs["repetition_penalty"] = config.REPETITION_PENALTY
 
-    response_text = await asyncio.to_thread(
-        generate,
-        model,
-        tokenizer,
-        prompt=prompt,
-        **gen_kwargs,
-    )
+    def thread_generate():
+        with mlx_lock:
+            return generate(
+                model,
+                tokenizer,
+                prompt=prompt,
+                **gen_kwargs,
+            )
+
+    response_text = await asyncio.to_thread(thread_generate)
 
     # Process the raw output: extract thinking + tool calls
     content_blocks, stop_reason = process_model_response(response_text, thinking_enabled)
@@ -682,10 +688,11 @@ async def stream_generate_response(
 
     def producer():
         try:
-            for response in stream_generate(
-                model, tokenizer, prompt=prompt, **gen_kwargs
-            ):
-                asyncio.run_coroutine_threadsafe(queue.put(response), loop)
+            with mlx_lock:
+                for response in stream_generate(
+                    model, tokenizer, prompt=prompt, **gen_kwargs
+                ):
+                    asyncio.run_coroutine_threadsafe(queue.put(response), loop)
             # Poison pill
             asyncio.run_coroutine_threadsafe(queue.put(None), loop)
         except Exception as e:
